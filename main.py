@@ -116,7 +116,7 @@ https://manager.line.biz/
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = subject
     msg['From'] = 'miyata.4078@gmail.com'
-    msg['To'] = 'miyata.4078@gmail.com'
+    msg['To'] = 'miyata.4078@gmail.com, ji24miyata@gmail.com'
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
