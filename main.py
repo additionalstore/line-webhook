@@ -53,7 +53,7 @@ SYSTEM_PROMPT = """
 
 
 def generate_reply(user_message):
-    api_key = os.environ['ANTHROPIC_API_KEY']
+    api_key = os.environ['ANTHROPIC_API_KEY'].strip()
     payload = json.dumps({
         'model': 'claude-haiku-4-5-20251001',
         'max_tokens': 512,
@@ -77,7 +77,7 @@ def generate_reply(user_message):
 
 def send_gmail_notification(user_message, reply_suggestion):
     gmail_user = os.environ.get('GMAIL_USER', 'miyata.4078@gmail.com')
-    gmail_password = os.environ.get('GMAIL_APP_PASSWORD', '')
+    gmail_password = os.environ.get('GMAIL_APP_PASSWORD', '').strip()
     notify_to = os.environ.get('NOTIFY_TO', 'miyata.4078@gmail.com')
 
     subject = f'【LINE返信案】{user_message[:20]}...'
