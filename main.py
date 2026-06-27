@@ -1,4 +1,5 @@
 import os
+import socket
 import threading
 import smtplib
 from email.mime.text import MIMEText
@@ -8,6 +9,14 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 import anthropic
 from dotenv import load_dotenv
+
+# Render.com ではIPv6が使えないためIPv4のみ使用する
+_orig_getaddrinfo = socket.getaddrinfo
+def _getaddrinfo_ipv4(*args, **kwargs):
+    results = _orig_getaddrinfo(*args, **kwargs)
+    ipv4 = [r for r in results if r[0] == socket.AF_INET]
+    return ipv4 if ipv4 else results
+socket.getaddrinfo = _getaddrinfo_ipv4
 
 load_dotenv()
 
@@ -76,16 +85,16 @@ https://manager.line.biz/
     msg['To'] = notify_to
 
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
             server.login(gmail_user, gmail_password)
             server.send_message(msg)
-        print(f'Gmail通知送信完了')
+        print('Gmail通知送信完了')
     except Exception as e:
         print(f'Gmail通知エラー: {e}')
 
 
 def process_message_background(user_message, user_id):
-    """バックグラウンドでClaude生成とGmail送信を実行（タイムアウト対策）"""
     print(f'バックグラウンド処理開始: {user_message[:30]}')
     try:
         reply_suggestion = generate_reply(user_message)
@@ -120,7 +129,6 @@ def handle_message(event):
     user_id = event.source.user_id
     print(f'受信: {user_message}')
 
-    # バックグラウンドスレッドで処理し、すぐに200 OKを返す
     thread = threading.Thread(target=process_message_background, args=(user_message, user_id))
     thread.daemon = True
     thread.start()
