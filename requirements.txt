@@ -1,5 +1,5 @@
 flask==3.0.3
 line-bot-sdk==3.11.0
-anthropic==0.30.1
+anthropic==0.40.0 
 python-dotenv==1.0.1
 gunicorn==22.0.0
