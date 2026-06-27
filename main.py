@@ -1,16 +1,18 @@
 import os
 import json
+import base64
 import socket
 import threading
-import smtplib
 import traceback
 import urllib.request
-import urllib.error
 from email.mime.text import MIMEText
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.discovery import build
 from dotenv import load_dotenv
 
 # Render.com ではIPv6が使えないためIPv4のみ使用する
@@ -76,9 +78,26 @@ def generate_reply(user_message):
 
 
 def send_gmail_notification(user_message, reply_suggestion):
-    gmail_user = os.environ.get('GMAIL_USER', 'miyata.4078@gmail.com')
-    gmail_password = os.environ.get('GMAIL_APP_PASSWORD', '').strip()
-    notify_to = os.environ.get('NOTIFY_TO', 'miyata.4078@gmail.com')
+    token_json_str = os.environ.get('GMAIL_TOKEN_JSON', '')
+    if not token_json_str:
+        print('Gmail通知エラー: GMAIL_TOKEN_JSON が設定されていません')
+        return
+
+    token_data = json.loads(token_json_str)
+    creds = Credentials(
+        token=token_data.get('token'),
+        refresh_token=token_data.get('refresh_token'),
+        token_uri=token_data.get('token_uri', 'https://oauth2.googleapis.com/token'),
+        client_id=token_data.get('client_id'),
+        client_secret=token_data.get('client_secret'),
+        scopes=token_data.get('scopes')
+    )
+
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+
+    service = build('gmail', 'v1', credentials=creds)
 
     subject = f'【LINE返信案】{user_message[:20]}...'
     body = f"""LINEにメッセージが届きました。
@@ -96,14 +115,13 @@ https://manager.line.biz/
 
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = subject
-    msg['From'] = gmail_user
-    msg['To'] = notify_to
+    msg['From'] = 'miyata.4078@gmail.com'
+    msg['To'] = 'miyata.4078@gmail.com'
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
     try:
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            server.login(gmail_user, gmail_password)
-            server.send_message(msg)
+        service.users().messages().send(userId='me', body={'raw': raw}).execute()
         print('Gmail通知送信完了')
     except Exception as e:
         print(f'Gmail通知エラー: {type(e).__name__}: {e}')
