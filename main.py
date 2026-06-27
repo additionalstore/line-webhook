@@ -93,6 +93,7 @@ https://manager.line.biz/
 
 @app.route('/callback', methods=['POST'])
 def callback():
+        print('=== LINEからWebhook受信 ===')
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
 
