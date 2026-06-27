@@ -1,15 +1,10 @@
 import os
-import hmac
-import hashlib
-import base64
+import threading
 import smtplib
 from email.mime.text import MIMEText
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import (
-    Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-)
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 import anthropic
 from dotenv import load_dotenv
@@ -19,7 +14,6 @@ load_dotenv()
 app = Flask(__name__)
 
 handler = WebhookHandler(os.environ['LINE_CHANNEL_SECRET'])
-configuration = Configuration(access_token=os.environ['LINE_CHANNEL_ACCESS_TOKEN'])
 
 SYSTEM_PROMPT = """
 あなたは「有限会社サラ（Additional Store）」のカスタマーサポート担当です。
@@ -57,9 +51,10 @@ def generate_reply(user_message):
     return response.content[0].text
 
 
-def send_gmail_notification(user_message, reply_suggestion, user_id):
-    gmail_user = os.environ.get('GMAIL_USER', 'additionalstore30@gmail.com')
+def send_gmail_notification(user_message, reply_suggestion):
+    gmail_user = os.environ.get('GMAIL_USER', 'miyata.4078@gmail.com')
     gmail_password = os.environ.get('GMAIL_APP_PASSWORD', '')
+    notify_to = os.environ.get('NOTIFY_TO', 'miyata.4078@gmail.com')
 
     subject = f'【LINE返信案】{user_message[:20]}...'
     body = f"""LINEにメッセージが届きました。
@@ -78,15 +73,29 @@ https://manager.line.biz/
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = subject
     msg['From'] = gmail_user
-    msg['To'] = gmail_user
+    msg['To'] = notify_to
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(gmail_user, gmail_password)
             server.send_message(msg)
-        print(f'Gmail通知送信完了: {subject}')
+        print(f'Gmail通知送信完了')
     except Exception as e:
         print(f'Gmail通知エラー: {e}')
+
+
+def process_message_background(user_message, user_id):
+    """バックグラウンドでClaude生成とGmail送信を実行（タイムアウト対策）"""
+    print(f'バックグラウンド処理開始: {user_message[:30]}')
+    try:
+        reply_suggestion = generate_reply(user_message)
+        print('Claude返信案生成完了')
+    except Exception as e:
+        print(f'Claude APIエラー: {e}')
+        reply_suggestion = '（返信案の生成に失敗しました）'
+
+    send_gmail_notification(user_message, reply_suggestion)
+    print('バックグラウンド処理完了')
 
 
 @app.route('/callback', methods=['POST'])
@@ -109,16 +118,12 @@ def callback():
 def handle_message(event):
     user_message = event.message.text
     user_id = event.source.user_id
-
     print(f'受信: {user_message}')
 
-    try:
-        reply_suggestion = generate_reply(user_message)
-    except Exception as e:
-        print(f'Claude APIエラー: {e}')
-        reply_suggestion = '（返信案の生成に失敗しました）'
-
-    send_gmail_notification(user_message, reply_suggestion, user_id)
+    # バックグラウンドスレッドで処理し、すぐに200 OKを返す
+    thread = threading.Thread(target=process_message_background, args=(user_message, user_id))
+    thread.daemon = True
+    thread.start()
 
 
 @app.route('/')
