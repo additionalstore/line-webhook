@@ -1,13 +1,16 @@
 import os
+import json
 import socket
 import threading
 import smtplib
+import traceback
+import urllib.request
+import urllib.error
 from email.mime.text import MIMEText
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
-import anthropic
 from dotenv import load_dotenv
 
 # Render.com ではIPv6が使えないためIPv4のみ使用する
@@ -50,14 +53,26 @@ SYSTEM_PROMPT = """
 
 
 def generate_reply(user_message):
-    client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
-    response = client.messages.create(
-        model='claude-haiku-4-5-20251001',
-        max_tokens=512,
-        system=SYSTEM_PROMPT,
-        messages=[{'role': 'user', 'content': user_message}]
+    api_key = os.environ['ANTHROPIC_API_KEY']
+    payload = json.dumps({
+        'model': 'claude-haiku-4-5-20251001',
+        'max_tokens': 512,
+        'system': SYSTEM_PROMPT,
+        'messages': [{'role': 'user', 'content': user_message}]
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        'https://api.anthropic.com/v1/messages',
+        data=payload,
+        method='POST'
     )
-    return response.content[0].text
+    req.add_header('x-api-key', api_key)
+    req.add_header('anthropic-version', '2023-06-01')
+    req.add_header('content-type', 'application/json')
+
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+    return result['content'][0]['text']
 
 
 def send_gmail_notification(user_message, reply_suggestion):
@@ -91,7 +106,8 @@ https://manager.line.biz/
             server.send_message(msg)
         print('Gmail通知送信完了')
     except Exception as e:
-        print(f'Gmail通知エラー: {e}')
+        print(f'Gmail通知エラー: {type(e).__name__}: {e}')
+        traceback.print_exc()
 
 
 def process_message_background(user_message, user_id):
@@ -100,7 +116,8 @@ def process_message_background(user_message, user_id):
         reply_suggestion = generate_reply(user_message)
         print('Claude返信案生成完了')
     except Exception as e:
-        print(f'Claude APIエラー: {e}')
+        print(f'Claude APIエラー: {type(e).__name__}: {e}')
+        traceback.print_exc()
         reply_suggestion = '（返信案の生成に失敗しました）'
 
     send_gmail_notification(user_message, reply_suggestion)
@@ -130,7 +147,7 @@ def handle_message(event):
     print(f'受信: {user_message}')
 
     thread = threading.Thread(target=process_message_background, args=(user_message, user_id))
-    thread.daemon = True
+    thread.daemon = False
     thread.start()
 
 
