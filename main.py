@@ -47,7 +47,6 @@ SYSTEM_PROMPT = """
 
 
 def generate_reply(user_message):
-    """Claude APIで返信案を生成"""
     client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
     response = client.messages.create(
         model='claude-haiku-4-5-20251001',
@@ -59,7 +58,6 @@ def generate_reply(user_message):
 
 
 def send_gmail_notification(user_message, reply_suggestion, user_id):
-    """Gmailで返信案を通知"""
     gmail_user = os.environ.get('GMAIL_USER', 'additionalstore30@gmail.com')
     gmail_password = os.environ.get('GMAIL_APP_PASSWORD', '')
 
@@ -93,13 +91,15 @@ https://manager.line.biz/
 
 @app.route('/callback', methods=['POST'])
 def callback():
-        print('=== LINEからWebhook受信 ===')
+    print('=== LINEからWebhook受信 ===')
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
+    print(f'ボディ: {body[:200]}')
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
+        print('署名エラー')
         abort(400)
 
     return 'OK'
@@ -112,14 +112,12 @@ def handle_message(event):
 
     print(f'受信: {user_message}')
 
-    # Claude で返信案を生成
     try:
         reply_suggestion = generate_reply(user_message)
     except Exception as e:
         print(f'Claude APIエラー: {e}')
         reply_suggestion = '（返信案の生成に失敗しました）'
 
-    # Gmail で通知
     send_gmail_notification(user_message, reply_suggestion, user_id)
 
 
