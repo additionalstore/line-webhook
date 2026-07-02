@@ -77,7 +77,7 @@ def generate_reply(user_message):
     return result['content'][0]['text']
 
 
-def send_gmail_notification(user_message, reply_suggestion):
+def send_gmail_notification(user_message, reply_suggestion, user_id):
     token_json_str = os.environ.get('GMAIL_TOKEN_JSON', '')
     if not token_json_str:
         print('Gmail通知エラー: GMAIL_TOKEN_JSON が設定されていません')
@@ -108,9 +108,14 @@ def send_gmail_notification(user_message, reply_suggestion):
 【返信案（Claude生成）】
 {reply_suggestion}
 
+【ユーザーID】
+{user_id}
+
 ---
 LINE Official Account Manager で確認・送信してください:
 https://manager.line.biz/
+
+Claude Codeに直接返信させる場合は、このメール本文をそのままチャットに貼ってください。
 """
 
     msg = MIMEText(body, 'plain', 'utf-8')
@@ -138,7 +143,7 @@ def process_message_background(user_message, user_id):
         traceback.print_exc()
         reply_suggestion = '（返信案の生成に失敗しました）'
 
-    send_gmail_notification(user_message, reply_suggestion)
+    send_gmail_notification(user_message, reply_suggestion, user_id)
     print('バックグラウンド処理完了')
 
 
