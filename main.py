@@ -9,7 +9,8 @@ from email.mime.text import MIMEText
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, FollowEvent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from dotenv import load_dotenv
 
 # Render.com ではIPv6が使えないためIPv4のみ使用する
@@ -25,6 +26,14 @@ load_dotenv()
 app = Flask(__name__)
 
 handler = WebhookHandler(os.environ['LINE_CHANNEL_SECRET'])
+line_config = Configuration(access_token=os.environ['LINE_CHANNEL_ACCESS_TOKEN'])
+
+GREETING_TEXT = (
+    "友だち追加ありがとうございます！Additional Store（高円寺の刺繍ファクトリー）です。\n\n"
+    "🎁 今なら初回注文限定で「刺繍データ作成費」が半額になる特典中です（7/31まで・お一人様1回）\n\n"
+    "ご注文の際に「LINE見ました」とお伝えください。店頭でもSquare通販でもご利用いただけます。\n\n"
+    "手書きのイラストやスマホで撮った写真を送っていただくだけでも、データ化・仕様のご相談を承ります。お気軽にどうぞ！"
+)
 
 SYSTEM_PROMPT = """
 あなたは「有限会社サラ（Additional Store）」のカスタマーサポート担当です。
@@ -156,6 +165,23 @@ def handle_message(event):
     thread = threading.Thread(target=process_message_background, args=(user_message, user_id))
     thread.daemon = False
     thread.start()
+
+
+@handler.add(FollowEvent)
+def handle_follow(event):
+    print('=== 友だち追加イベント受信 ===')
+    try:
+        with ApiClient(line_config) as api_client:
+            MessagingApi(api_client).reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=GREETING_TEXT)],
+                )
+            )
+        print('あいさつメッセージ送信完了')
+    except Exception as e:
+        print(f'あいさつメッセージ送信エラー: {type(e).__name__}: {e}')
+        traceback.print_exc()
 
 
 @app.route('/')
