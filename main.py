@@ -4,13 +4,17 @@ import smtplib
 import socket
 import threading
 import traceback
+import uuid
 import urllib.request
 from email.mime.text import MIMEText
-from flask import Flask, request, abort
+from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
+from flask import Flask, request, abort, jsonify, send_from_directory
+from werkzeug.utils import secure_filename
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.webhooks import MessageEvent, TextMessageContent, FollowEvent
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FollowEvent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
 from dotenv import load_dotenv
 
 # Render.com ではIPv6が使えないためIPv4のみ使用する
@@ -28,12 +32,34 @@ app = Flask(__name__)
 handler = WebhookHandler(os.environ['LINE_CHANNEL_SECRET'])
 line_config = Configuration(access_token=os.environ['LINE_CHANNEL_ACCESS_TOKEN'])
 
+DESIGNS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'designs')
+os.makedirs(DESIGNS_DIR, exist_ok=True)
+
 GREETING_TEXT = (
     "友だち追加ありがとうございます！Additional Store（高円寺の刺繍ファクトリー）です。\n\n"
     "🎁 今なら初回注文限定で「刺繍データ作成費」が半額になる特典中です（7/31まで・お一人様1回）\n\n"
     "ご注文の際に「LINE見ました」とお伝えください。店頭でもSquare通販でもご利用いただけます。\n\n"
     "手書きのイラストやスマホで撮った写真を送っていただくだけでも、データ化・仕様のご相談を承ります。お気軽にどうぞ！"
 )
+
+QUOTE_REQUEST_TRIGGER = "見積もりを依頼したいです"
+QUOTE_REQUEST_AUTO_REPLY = (
+    "お見積もりのご依頼ありがとうございます！\n\n"
+    "🎁 今なら初回注文限定で「刺繍データ作成費」が半額になるキャンペーン中です（7/31まで・お一人様1回）\n\n"
+    "担当よりあらためてご連絡いたしますので、少々お待ちください。お急ぎの場合は下記までお電話ください。\n"
+    "📞ショップ：03-5913-7719\n"
+    "📞ファクトリー直通：03-5364-9934"
+)
+
+
+def reply_line_message(reply_token, text):
+    with ApiClient(line_config) as api_client:
+        MessagingApi(api_client).reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[TextMessage(text=text)],
+            )
+        )
 
 SYSTEM_PROMPT = """
 あなたは「有限会社サラ（Additional Store）」のカスタマーサポート担当です。
@@ -126,6 +152,59 @@ Claude Codeに直接返信させる場合は、このメール本文をそのま
         traceback.print_exc()
 
 
+def send_gmail_image_notification(image_bytes, user_id):
+    """LINEで届いた画像を添付してGmail通知を送る"""
+    gmail_user = os.environ.get('GMAIL_USER', '')
+    gmail_app_password = os.environ.get('GMAIL_APP_PASSWORD', '')
+    if not gmail_user or not gmail_app_password:
+        print('Gmail通知エラー: GMAIL_USER または GMAIL_APP_PASSWORD が設定されていません')
+        return
+
+    to_addrs = ['miyata.4078@gmail.com', 'ji24miyata@gmail.com']
+
+    msg = MIMEMultipart()
+    msg['Subject'] = '【LINE画像】お客様から画像が届きました'
+    msg['From'] = gmail_user
+    msg['To'] = ', '.join(to_addrs)
+
+    body = f"""LINEに画像が届きました。
+
+添付の画像を確認し、デザイン案の作成が必要であればClaude Codeに「この画像から刺繍デザイン案を作って」と伝えてください。
+
+【ユーザーID】
+{user_id}
+"""
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+    image_part = MIMEImage(image_bytes)
+    image_part.add_header('Content-Disposition', 'attachment', filename='line_image.jpg')
+    msg.attach(image_part)
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15) as server:
+            server.login(gmail_user, gmail_app_password)
+            server.sendmail(gmail_user, to_addrs, msg.as_string())
+        print('画像Gmail通知送信完了')
+    except Exception as e:
+        print(f'画像Gmail通知エラー: {type(e).__name__}: {e}')
+        traceback.print_exc()
+
+
+def process_image_message_background(message_id, user_id):
+    print(f'画像メッセージ バックグラウンド処理開始: message_id={message_id}')
+    try:
+        with ApiClient(line_config) as api_client:
+            image_bytes = MessagingApiBlob(api_client).get_message_content(message_id)
+        print('画像取得完了')
+    except Exception as e:
+        print(f'画像取得エラー: {type(e).__name__}: {e}')
+        traceback.print_exc()
+        return
+
+    send_gmail_image_notification(image_bytes, user_id)
+    print('画像メッセージ バックグラウンド処理完了')
+
+
 def process_message_background(user_message, user_id):
     print(f'バックグラウンド処理開始: {user_message[:30]}')
     try:
@@ -162,7 +241,26 @@ def handle_message(event):
     user_id = event.source.user_id
     print(f'受信: {user_message}')
 
+    if user_message == QUOTE_REQUEST_TRIGGER:
+        try:
+            reply_line_message(event.reply_token, QUOTE_REQUEST_AUTO_REPLY)
+            print('お見積もり依頼の自動返信完了')
+        except Exception as e:
+            print(f'お見積もり依頼の自動返信エラー: {type(e).__name__}: {e}')
+            traceback.print_exc()
+
     thread = threading.Thread(target=process_message_background, args=(user_message, user_id))
+    thread.daemon = False
+    thread.start()
+
+
+@handler.add(MessageEvent, message=ImageMessageContent)
+def handle_image_message(event):
+    message_id = event.message.id
+    user_id = event.source.user_id
+    print(f'画像受信: message_id={message_id}')
+
+    thread = threading.Thread(target=process_image_message_background, args=(message_id, user_id))
     thread.daemon = False
     thread.start()
 
@@ -171,17 +269,34 @@ def handle_message(event):
 def handle_follow(event):
     print('=== 友だち追加イベント受信 ===')
     try:
-        with ApiClient(line_config) as api_client:
-            MessagingApi(api_client).reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=GREETING_TEXT)],
-                )
-            )
+        reply_line_message(event.reply_token, GREETING_TEXT)
         print('あいさつメッセージ送信完了')
     except Exception as e:
         print(f'あいさつメッセージ送信エラー: {type(e).__name__}: {e}')
         traceback.print_exc()
+
+
+@app.route('/upload_design', methods=['POST'])
+def upload_design():
+    secret = request.headers.get('X-Upload-Secret', '')
+    if not secret or secret != os.environ.get('DESIGN_UPLOAD_SECRET', ''):
+        abort(401)
+
+    image_bytes = request.get_data()
+    if not image_bytes:
+        return jsonify({'error': 'no image data'}), 400
+
+    filename = secure_filename(f'{uuid.uuid4().hex}.png')
+    with open(os.path.join(DESIGNS_DIR, filename), 'wb') as f:
+        f.write(image_bytes)
+
+    url = request.host_url.rstrip('/') + f'/designs/{filename}'
+    return jsonify({'url': url})
+
+
+@app.route('/designs/<filename>')
+def get_design(filename):
+    return send_from_directory(DESIGNS_DIR, secure_filename(filename))
 
 
 @app.route('/')
