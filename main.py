@@ -135,7 +135,7 @@ https://manager.line.biz/
 Claude Codeに直接返信させる場合は、このメール本文をそのままチャットに貼ってください。
 """
 
-    to_addrs = ['miyata.4078@gmail.com', 'ji24miyata@gmail.com']
+    to_addrs = ['miyata.4078@gmail.com']
 
     msg = MIMEText(body, 'plain', 'utf-8')
     msg['Subject'] = subject
@@ -160,7 +160,7 @@ def send_gmail_image_notification(image_bytes, user_id):
         print('Gmail通知エラー: GMAIL_USER または GMAIL_APP_PASSWORD が設定されていません')
         return
 
-    to_addrs = ['miyata.4078@gmail.com', 'ji24miyata@gmail.com']
+    to_addrs = ['miyata.4078@gmail.com']
 
     msg = MIMEMultipart()
     msg['Subject'] = '【LINE画像】お客様から画像が届きました'
