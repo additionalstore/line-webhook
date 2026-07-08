@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FollowEvent
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, TextMessage
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob, ReplyMessageRequest, PushMessageRequest, TextMessage
 from dotenv import load_dotenv
 
 # Render.com ではIPv6が使えないためIPv4のみ使用する
@@ -35,6 +35,19 @@ line_config = Configuration(access_token=os.environ['LINE_CHANNEL_ACCESS_TOKEN']
 DESIGNS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'designs')
 os.makedirs(DESIGNS_DIR, exist_ok=True)
 
+# ユーザーごとの簡易会話履歴（プロセス起動中のみ保持。再デプロイ・スリープで消える）
+CONVERSATION_HISTORY = {}
+HISTORY_MAX_TURNS = 20
+
+def append_history(user_id, role, text):
+    history = CONVERSATION_HISTORY.setdefault(user_id, [])
+    if history and history[-1]['role'] == role:
+        history[-1]['content'] += '\n' + text
+    else:
+        history.append({'role': role, 'content': text})
+    if len(history) > HISTORY_MAX_TURNS:
+        del history[:-HISTORY_MAX_TURNS]
+
 GREETING_TEXT = (
     "友だち追加ありがとうございます！Additional Store（高円寺の刺繍ファクトリー）です。\n\n"
     "🎁 今なら初回注文限定で「刺繍データ作成費」が半額になる特典中です（7/31まで・お一人様1回）\n\n"
@@ -50,7 +63,6 @@ QUOTE_REQUEST_AUTO_REPLY = (
     "📞ショップ：03-5913-7719\n"
     "📞ファクトリー直通：03-5364-9934"
 )
-
 
 def reply_line_message(reply_token, text):
     with ApiClient(line_config) as api_client:
@@ -85,14 +97,14 @@ SYSTEM_PROMPT = """
 - 署名は不要
 """
 
-
-def generate_reply(user_message):
+def generate_reply(user_id, user_message):
     api_key = os.environ['ANTHROPIC_API_KEY'].strip()
+    messages = CONVERSATION_HISTORY.get(user_id) or [{'role': 'user', 'content': user_message}]
     payload = json.dumps({
         'model': 'claude-haiku-4-5-20251001',
         'max_tokens': 512,
         'system': SYSTEM_PROMPT,
-        'messages': [{'role': 'user', 'content': user_message}]
+        'messages': messages
     }).encode('utf-8')
 
     req = urllib.request.Request(
@@ -107,7 +119,6 @@ def generate_reply(user_message):
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read())
     return result['content'][0]['text']
-
 
 def send_gmail_notification(user_message, reply_suggestion, user_id):
     gmail_user = os.environ.get('GMAIL_USER', '')
@@ -151,7 +162,6 @@ Claude Codeに直接返信させる場合は、このメール本文をそのま
         print(f'Gmail通知エラー: {type(e).__name__}: {e}')
         traceback.print_exc()
 
-
 def send_gmail_image_notification(image_bytes, user_id):
     """LINEで届いた画像を添付してGmail通知を送る"""
     gmail_user = os.environ.get('GMAIL_USER', '')
@@ -189,7 +199,6 @@ def send_gmail_image_notification(image_bytes, user_id):
         print(f'画像Gmail通知エラー: {type(e).__name__}: {e}')
         traceback.print_exc()
 
-
 def process_image_message_background(message_id, user_id):
     print(f'画像メッセージ バックグラウンド処理開始: message_id={message_id}')
     try:
@@ -204,11 +213,10 @@ def process_image_message_background(message_id, user_id):
     send_gmail_image_notification(image_bytes, user_id)
     print('画像メッセージ バックグラウンド処理完了')
 
-
 def process_message_background(user_message, user_id):
     print(f'バックグラウンド処理開始: {user_message[:30]}')
     try:
-        reply_suggestion = generate_reply(user_message)
+        reply_suggestion = generate_reply(user_id, user_message)
         print('Claude返信案生成完了')
     except Exception as e:
         print(f'Claude APIエラー: {type(e).__name__}: {e}')
@@ -217,7 +225,6 @@ def process_message_background(user_message, user_id):
 
     send_gmail_notification(user_message, reply_suggestion, user_id)
     print('バックグラウンド処理完了')
-
 
 @app.route('/callback', methods=['POST'])
 def callback():
@@ -233,7 +240,6 @@ def callback():
         abort(400)
 
     return 'OK'
-
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -253,7 +259,6 @@ def handle_message(event):
     thread.daemon = False
     thread.start()
 
-
 @handler.add(MessageEvent, message=ImageMessageContent)
 def handle_image_message(event):
     message_id = event.message.id
@@ -264,7 +269,6 @@ def handle_image_message(event):
     thread.daemon = False
     thread.start()
 
-
 @handler.add(FollowEvent)
 def handle_follow(event):
     print('=== 友だち追加イベント受信 ===')
@@ -274,7 +278,6 @@ def handle_follow(event):
     except Exception as e:
         print(f'あいさつメッセージ送信エラー: {type(e).__name__}: {e}')
         traceback.print_exc()
-
 
 @app.route('/upload_design', methods=['POST'])
 def upload_design():
@@ -293,17 +296,6 @@ def upload_design():
     url = request.host_url.rstrip('/') + f'/designs/{filename}'
     return jsonify({'url': url})
 
-
 @app.route('/designs/<filename>')
 def get_design(filename):
     return send_from_directory(DESIGNS_DIR, secure_filename(filename))
-
-
-@app.route('/')
-def index():
-    return 'Additional Store LINE Webhook - 稼働中'
-
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
