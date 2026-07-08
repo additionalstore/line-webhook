@@ -299,3 +299,40 @@ def upload_design():
 @app.route('/designs/<filename>')
 def get_design(filename):
     return send_from_directory(DESIGNS_DIR, secure_filename(filename))
+  
+
+@app.route('/send_reply', methods=['POST'])
+def send_reply():
+    """外出先などローカルPCなしでLINE返信を送るためのエンドポイント。
+    社長の明示確認を得たうえでClaudeが叩く想定（勝手な自動送信はしないこと）。"""
+    secret = request.headers.get('X-Send-Secret', '')
+    if not secret or secret != os.environ.get('SEND_REPLY_SECRET', ''):
+        abort(401)
+
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id', '')
+    message = data.get('message', '')
+    if not user_id or not message:
+        return jsonify({'error': 'user_id and message are required'}), 400
+
+    try:
+        with ApiClient(line_config) as api_client:
+            MessagingApi(api_client).push_message(
+                PushMessageRequest(to=user_id, messages=[TextMessage(text=message)])
+            )
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': f'{type(e).__name__}: {e}'}), 500
+
+    return jsonify({'status': 'sent'})
+
+
+@app.route('/')
+def index():
+    return 'Additional Store LINE Webhook - 稼働中'
+
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
+  
